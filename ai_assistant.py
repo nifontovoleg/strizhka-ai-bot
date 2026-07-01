@@ -80,11 +80,11 @@ FUNCTIONS = [
 ]
 
 
-def _dispatch(name: str, args: dict, chat_id: int) -> dict:
+def _dispatch(name: str, args: dict, chat_id: int, created: list) -> dict:
     if name == "get_available_slots":
         return booking.available_slots(args.get("date", ""), args.get("service", ""))
     if name == "create_booking":
-        return booking.create_booking(
+        result = booking.create_booking(
             chat_id,
             args.get("date", ""),
             args.get("time", ""),
@@ -92,6 +92,9 @@ def _dispatch(name: str, args: dict, chat_id: int) -> dict:
             args.get("client_name", ""),
             args.get("client_phone", ""),
         )
+        if result.get("ok"):
+            created.append(result)
+        return result
     return {"ok": False, "error": f"Неизвестная функция {name}"}
 
 
@@ -100,12 +103,14 @@ def build_history() -> list:
     return [Messages(role=MessagesRole.SYSTEM, content=_system_prompt())]
 
 
-def reply(history: list, user_text: str, chat_id: int) -> str:
+def reply(history: list, user_text: str, chat_id: int):
     """Обрабатывает сообщение пользователя, при необходимости вызывая функции.
 
     history мутируется на месте (добавляются реплики пользователя и ассистента).
+    Возвращает кортеж (текст_ответа, список_созданных_записей).
     """
     history.append(Messages(role=MessagesRole.USER, content=user_text))
+    created: list = []
 
     for _ in range(5):  # ограничение на число цепочек вызовов функций
         payload = Chat(
@@ -119,11 +124,11 @@ def reply(history: list, user_text: str, chat_id: int) -> str:
         history.append(msg)
 
         if msg.function_call is None:
-            return msg.content or "Извините, не расслышал. Повторите, пожалуйста."
+            return (msg.content or "Извините, не расслышал. Повторите, пожалуйста.", created)
 
         fc = msg.function_call
         args = fc.arguments if isinstance(fc.arguments, dict) else {}
-        result = _dispatch(fc.name, args, chat_id)
+        result = _dispatch(fc.name, args, chat_id, created)
         history.append(
             Messages(
                 role=MessagesRole.FUNCTION,
@@ -132,4 +137,4 @@ def reply(history: list, user_text: str, chat_id: int) -> str:
             )
         )
 
-    return "Извините, не удалось обработать запрос. Попробуйте переформулировать."
+    return ("Извините, не удалось обработать запрос. Попробуйте переформулировать.", created)

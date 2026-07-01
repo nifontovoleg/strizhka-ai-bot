@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 import config
 import database as db
+import google_calendar
 import knowledge_base as kb
 
 
@@ -114,6 +115,17 @@ def create_booking(chat_id: int, date_str: str, time_str: str, service_name: str
     booking_id = db.add_booking(
         chat_id, name, start.isoformat(), end.isoformat(), client_name, client_phone
     )
+
+    # Опционально дублируем запись в Google Calendar.
+    event_id = google_calendar.create_event(
+        summary=f"{name} — {client_name}",
+        description=f"Услуга: {name}\nКлиент: {client_name}\nТелефон: {client_phone}",
+        start=start,
+        end=end,
+    )
+    if event_id:
+        db.set_gcal_event(booking_id, event_id)
+
     return {
         "ok": True,
         "booking_id": booking_id,

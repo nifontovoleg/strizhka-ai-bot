@@ -12,6 +12,7 @@ BTN_SERVICES = "✂️ Услуги и цены"
 BTN_HOURS = "🕐 Часы работы"
 BTN_BOOK = "📅 Записаться"
 BTN_CONTACTS = "📍 Адрес и контакты"
+BTN_MY_BOOKINGS = "🗓 Мои записи"
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -19,9 +20,17 @@ def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             [BTN_SERVICES, BTN_HOURS],
-            [BTN_BOOK, BTN_CONTACTS],
+            [BTN_BOOK, BTN_MY_BOOKINGS],
+            [BTN_CONTACTS],
         ],
         resize_keyboard=True,
+    )
+
+
+def cancel_inline(booking_id: int) -> InlineKeyboardMarkup:
+    """Инлайн-кнопка отмены конкретной записи."""
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Отменить запись", callback_data=f"cancel:{booking_id}")]]
     )
 
 

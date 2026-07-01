@@ -22,6 +22,18 @@ TZ = ZoneInfo(SALON_TIMEZONE)
 
 DB_PATH = os.getenv("DB_PATH", "bookings.db")
 
+# ID чата администратора для уведомлений о новых записях (необязательно).
+# Узнать свой ID можно у бота @userinfobot. Если пусто — уведомления отключены.
+_admin = os.getenv("ADMIN_CHAT_ID", "").strip()
+ADMIN_CHAT_ID = int(_admin) if _admin.lstrip("-").isdigit() else None
+
+# Google Calendar (необязательно). Включается, если GOOGLE_CALENDAR_ENABLED=true
+# и рядом лежит credentials.json (OAuth client) из Google Cloud Console.
+GOOGLE_CALENDAR_ENABLED = os.getenv("GOOGLE_CALENDAR_ENABLED", "false").lower() in ("1", "true", "yes")
+GOOGLE_CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+GOOGLE_TOKEN_FILE = os.getenv("GOOGLE_TOKEN_FILE", "token.json")
+GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+
 
 def validate() -> None:
     """Проверяет наличие обязательных настроек перед запуском."""

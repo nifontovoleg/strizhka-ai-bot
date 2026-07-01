@@ -28,10 +28,15 @@ def init_db() -> None:
                 end          TEXT    NOT NULL,   -- ISO datetime, конец
                 client_name  TEXT,
                 client_phone TEXT,
+                gcal_event_id TEXT,              -- id события в Google Calendar
                 created_at   TEXT    DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        # Мягкая миграция для старых баз без столбца gcal_event_id.
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(bookings)").fetchall()]
+        if "gcal_event_id" not in cols:
+            conn.execute("ALTER TABLE bookings ADD COLUMN gcal_event_id TEXT")
 
 
 def get_bookings_for_day(day_iso: str):
@@ -64,3 +69,42 @@ def add_booking(chat_id, service, start_iso, end_iso, client_name, client_phone)
             (chat_id, service, start_iso, end_iso, client_name, client_phone),
         )
         return cur.lastrowid
+
+
+def set_gcal_event(booking_id: int, event_id: str) -> None:
+    """Сохраняет id события Google Calendar для записи."""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE bookings SET gcal_event_id = ? WHERE id = ?",
+            (event_id, booking_id),
+        )
+
+
+def get_upcoming_bookings(chat_id: int, now_iso: str):
+    """Возвращает будущие записи клиента (по chat_id)."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM bookings WHERE chat_id = ? AND end >= ? ORDER BY start",
+            (chat_id, now_iso),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_booking(booking_id: int, chat_id: int):
+    """Возвращает запись по id, если она принадлежит этому клиенту."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM bookings WHERE id = ? AND chat_id = ?",
+            (booking_id, chat_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def delete_booking(booking_id: int, chat_id: int) -> bool:
+    """Удаляет запись клиента. Возвращает True, если что-то удалено."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM bookings WHERE id = ? AND chat_id = ?",
+            (booking_id, chat_id),
+        )
+        return cur.rowcount > 0
