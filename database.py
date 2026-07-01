@@ -38,6 +38,45 @@ def init_db() -> None:
         if "gcal_event_id" not in cols:
             conn.execute("ALTER TABLE bookings ADD COLUMN gcal_event_id TEXT")
 
+        # Известные пользователи: сопоставление @username -> chat_id.
+        # Нужно, чтобы уведомлять админов, заданных по username.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS known_users (
+                username   TEXT PRIMARY KEY,
+                chat_id    INTEGER NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+
+def remember_user(username: str, chat_id: int) -> None:
+    """Запоминает/обновляет соответствие username -> chat_id (username в нижнем регистре)."""
+    if not username:
+        return
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO known_users (username, chat_id, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(username) DO UPDATE SET
+                chat_id = excluded.chat_id,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (username.lower(), chat_id),
+        )
+
+
+def get_chat_id_by_username(username: str):
+    """Возвращает chat_id по username или None, если пользователь ещё не писал боту."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT chat_id FROM known_users WHERE username = ?",
+            (username.lower(),),
+        ).fetchone()
+        return row["chat_id"] if row else None
+
 
 def get_bookings_for_day(day_iso: str):
     """Возвращает записи за конкретный день (YYYY-MM-DD)."""

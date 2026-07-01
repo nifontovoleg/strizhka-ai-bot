@@ -22,10 +22,38 @@ TZ = ZoneInfo(SALON_TIMEZONE)
 
 DB_PATH = os.getenv("DB_PATH", "bookings.db")
 
-# ID чата администратора для уведомлений о новых записях (необязательно).
-# Узнать свой ID можно у бота @userinfobot. Если пусто — уведомления отключены.
-_admin = os.getenv("ADMIN_CHAT_ID", "").strip()
-ADMIN_CHAT_ID = int(_admin) if _admin.lstrip("-").isdigit() else None
+# Кому присылать уведомления о записях и отменах (личные сообщения от бота).
+# Одна строка, через запятую: @username и/или числовой chat_id.
+#   ADMIN_ACCOUNTS=@olegugfv_reg59,5921878055
+# Каждый админ с @username должен один раз нажать /start у бота.
+# Также поддерживаются старые переменные ADMIN_USERNAMES и ADMIN_CHAT_IDS.
+def _parse_admin_ids(*values) -> set:
+    ids = set()
+    for value in values:
+        for part in value.split(","):
+            part = part.strip()
+            if part.lstrip("-").isdigit():
+                ids.add(int(part))
+    return ids
+
+
+def _parse_usernames(*values) -> list:
+    result = []
+    for value in values:
+        for part in value.split(","):
+            name = part.strip().lstrip("@").lower()
+            if name and not name.lstrip("-").isdigit():
+                result.append(name)
+    return result
+
+
+_accounts = os.getenv("ADMIN_ACCOUNTS", "")
+ADMIN_CHAT_IDS = _parse_admin_ids(
+    _accounts, os.getenv("ADMIN_CHAT_ID", ""), os.getenv("ADMIN_CHAT_IDS", "")
+)
+ADMIN_USERNAMES = _parse_usernames(
+    _accounts, os.getenv("ADMIN_USERNAMES", "")
+)
 
 # Google Calendar (необязательно). Включается, если GOOGLE_CALENDAR_ENABLED=true
 # и рядом лежит credentials.json (OAuth client) из Google Cloud Console.

@@ -11,6 +11,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -37,10 +38,67 @@ def _get_history(context: ContextTypes.DEFAULT_TYPE) -> list:
     return history
 
 
-async def _notify_admin(context: ContextTypes.DEFAULT_TYPE, bookings: list) -> None:
-    """Отправляет администратору уведомления о новых записях."""
-    if not config.ADMIN_CHAT_ID:
+async def remember_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Запоминает username -> chat_id любого, кто взаимодействует с ботом."""
+    user = update.effective_user
+    chat = update.effective_chat
+    if user and user.username and chat:
+        db.remember_user(user.username, chat.id)
+
+
+def _is_admin_user(user) -> bool:
+    if not user:
+        return False
+    if user.id in config.ADMIN_CHAT_IDS:
+        return True
+    if user.username and user.username.lower() in config.ADMIN_USERNAMES:
+        return True
+    return False
+
+
+def _resolve_admin_chat_ids(exclude_chat_id: int | None = None) -> set:
+    """Chat_id админов из .env. exclude_chat_id — не слать в чат клиента (тот же диалог)."""
+    ids = set(config.ADMIN_CHAT_IDS)
+    for username in config.ADMIN_USERNAMES:
+        cid = db.get_chat_id_by_username(username)
+        if cid:
+            ids.add(cid)
+        else:
+            logger.warning(
+                "Админ @%s ещё не нажимал /start у бота — уведомление не дойдёт",
+                username,
+            )
+    if exclude_chat_id is not None:
+        ids.discard(exclude_chat_id)
+    return ids
+
+
+async def _notify_admins(
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    exclude_chat_id: int | None = None,
+) -> None:
+    """Рассылает уведомление только админам из .env — в их личку с ботом."""
+    admin_ids = _resolve_admin_chat_ids(exclude_chat_id=exclude_chat_id)
+    if not admin_ids:
+        logger.warning(
+            "Нет админов для уведомления (проверьте ADMIN_ACCOUNTS в .env и /start)"
+        )
         return
+    logger.info("Уведомление админам (личка): %s", sorted(admin_ids))
+    for cid in admin_ids:
+        try:
+            await context.bot.send_message(chat_id=cid, text=text)
+        except Exception:  # noqa: BLE001
+            logger.exception("Не удалось отправить уведомление админу %s", cid)
+
+
+async def _notify_new_bookings(
+    context: ContextTypes.DEFAULT_TYPE,
+    bookings: list,
+    client_chat_id: int,
+) -> None:
+    """Уведомляет админов о новых записях (не в чат клиента)."""
     for b in bookings:
         text = (
             "🔔 Новая запись!\n"
@@ -49,10 +107,7 @@ async def _notify_admin(context: ContextTypes.DEFAULT_TYPE, bookings: list) -> N
             f"Клиент: {b['client_name']}\n"
             f"Телефон: {b['client_phone']}"
         )
-        try:
-            await context.bot.send_message(chat_id=config.ADMIN_CHAT_ID, text=text)
-        except Exception:  # noqa: BLE001
-            logger.exception("Не удалось отправить уведомление администратору")
+        await _notify_admins(context, text, exclude_chat_id=client_chat_id)
 
 
 async def _ask_llm(history: list, text: str, chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -62,14 +117,22 @@ async def _ask_llm(history: list, text: str, chat_id: int, context: ContextTypes
     except Exception:  # noqa: BLE001
         logger.exception("Ошибка при обращении к LLM")
         return "Извините, произошла техническая ошибка. Попробуйте ещё раз чуть позже."
+    logger.info("LLM ответил; создано записей: %d", len(created))
     if created:
-        await _notify_admin(context, created)
+        await _notify_new_bookings(context, created, client_chat_id=chat_id)
     return answer
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["history"] = ai_assistant.build_history()
     await update.message.reply_text(GREETING, reply_markup=keyboards.main_menu())
+    user = update.effective_user
+    if _is_admin_user(user):
+        await update.message.reply_text(
+            "✅ Вы в списке администраторов.\n"
+            "Уведомления о записях и отменах будут приходить сюда, "
+            "в личные сообщения с ботом (не в чат клиента)."
+        )
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -158,19 +221,16 @@ async def on_cancel_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"Запись отменена: {row['service']} — {start.strftime('%Y-%m-%d')} в {start.strftime('%H:%M')}."
     )
 
-    if config.ADMIN_CHAT_ID:
-        try:
-            await context.bot.send_message(
-                chat_id=config.ADMIN_CHAT_ID,
-                text=(
-                    "❌ Отмена записи!\n"
-                    f"Услуга: {row['service']}\n"
-                    f"Было: {start.strftime('%Y-%m-%d')} в {start.strftime('%H:%M')}\n"
-                    f"Клиент: {row.get('client_name')}"
-                ),
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Не удалось уведомить администратора об отмене")
+    await _notify_admins(
+        context,
+        (
+            "❌ Отмена записи!\n"
+            f"Услуга: {row['service']}\n"
+            f"Было: {start.strftime('%Y-%m-%d')} в {start.strftime('%H:%M')}\n"
+            f"Клиент: {row.get('client_name')}"
+        ),
+        exclude_chat_id=chat_id,
+    )
 
 
 def main() -> None:
@@ -178,6 +238,8 @@ def main() -> None:
     db.init_db()
 
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+    # Запоминаем username -> chat_id для любого апдейта (группа -1, до основных хэндлеров).
+    app.add_handler(TypeHandler(Update, remember_user), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("mybookings", my_bookings))
